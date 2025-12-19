@@ -1,0 +1,39 @@
+# Core dependencies for Edge SLM Agent
+# Install with: pip install -r requirements.txt
+
+# PyTorch (install first, may need CUDA-specific version)
+# For CUDA 11.8: pip install torch --index-url https://download.pytorch.org/whl/cu118
+# For CUDA 12.1: pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0
+
+# Transformers and training
+transformers>=4.36.0
+peft>=0.7.0
+datasets>=2.15.0
+accelerate>=0.25.0
+bitsandbytes>=0.41.0
+trl>=0.7.0
+
+# API and server
+openai>=1.0.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+
+# Utilities
+jsonschema>=4.20.0
+tiktoken>=0.5.0
+wandb>=0.16.0
+rich>=13.0.0
+typer>=0.9.0
+gradio>=4.0.0
+
+# Optional: vLLM (Linux only, requires CUDA)
+# vllm>=0.2.0
+
+# Optional: Outlines for structured decoding (requires Rust compiler on Windows)
+# Install Rust first: https://rustup.rs/
+# outlines>=0.0.34
+
+# Optional: Unsloth for faster training
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
