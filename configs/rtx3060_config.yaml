@@ -1,0 +1,130 @@
+# Configuration optimized for RTX 3060 (6GB VRAM)
+# Edge SLM Agent - Tool-Use Fine-tuning & Inference
+
+project:
+  name: "edge-slm-agent"
+  version: "0.1.0"
+  seed: 42
+
+# Model Configuration
+model:
+  # Base model - Qwen2.5-3B is optimal for 6GB VRAM
+  name: "Qwen/Qwen2.5-3B-Instruct"
+  # Alternative: "microsoft/Phi-3-mini-4k-instruct"
+  
+  # Quantization for memory efficiency
+  quantization: "int4"  # Options: none, int4, int8, awq
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_quant_type: "nf4"
+  use_double_quant: true
+  
+  # Memory limits
+  max_memory_mb: 5500  # Leave ~500MB for KV cache
+  device_map: "auto"
+
+# LoRA Configuration
+lora:
+  # LoRA hyperparameters
+  r: 32  # Reduced for memory efficiency (vs 64 for larger GPUs)
+  alpha: 64
+  dropout: 0.05
+  
+  # Target modules for Qwen
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  
+  # Training settings
+  learning_rate: 2.0e-4
+  batch_size: 2  # Small batch for 6GB
+  gradient_accumulation_steps: 8  # Effective batch = 16
+  num_epochs: 3
+  max_seq_length: 1536  # Reduced for memory
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  
+  # Optimizer
+  optim: "adamw_8bit"
+  lr_scheduler: "cosine"
+  
+  # Memory optimization
+  gradient_checkpointing: true
+
+# Inference Configuration
+inference:
+  # Engine selection
+  engine: "transformers"  # Options: transformers, vllm, llama_cpp
+  
+  # vLLM settings (if using vLLM)
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.80
+  max_model_len: 2048
+  
+  # Generation parameters
+  max_new_tokens: 512
+  temperature: 0.1  # Low for structured output
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.05
+  
+  # Structured decoding (CORE FEATURE)
+  use_guided_decoding: true
+  guided_decoding_backend: "outlines"
+
+# Data Configuration
+data:
+  # Paths
+  raw_data_path: "data/raw"
+  processed_data_path: "data/processed"
+  output_path: "data/tool_use_dataset"
+  
+  # GPT-4 distillation
+  teacher_model: "gpt-4-turbo-preview"
+  distillation_temperature: 0.7
+  num_samples: 1000
+  
+  # Data split
+  train_ratio: 0.85
+  val_ratio: 0.10
+  test_ratio: 0.05
+
+# Agent Configuration
+agent:
+  # Routing strategy
+  routing_strategy: "local_first"  # Options: local_first, cloud_first, local_only, smart
+  
+  # Local model settings
+  local_endpoint: "http://localhost:8000"
+  local_timeout_ms: 5000
+  
+  # Cloud fallback
+  cloud_model: "gpt-4-turbo-preview"
+  cloud_timeout_ms: 30000
+  
+  # Routing thresholds
+  complexity_threshold: 0.7
+  confidence_threshold: 0.8
+  
+  # Retry settings
+  max_retries: 2
+  retry_delay_ms: 100
+
+# Output Configuration
+output:
+  dir: "outputs"
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  save_total_limit: 3
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "edge-slm-agent"
+  log_level: "INFO"
