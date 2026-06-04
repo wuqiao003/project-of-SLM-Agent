@@ -24,7 +24,7 @@ from peft import (
     prepare_model_for_kbit_training,
     TaskType,
 )
-from trl import SFTTrainer
+from transformers import Trainer, TrainerCallback
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,11 @@ class TrainingConfig:
     eval_steps: int = 100
     save_total_limit: int = 3
     
+    # Host load control
+    dataloader_num_workers: int = 0
+    dataloader_pin_memory: bool = False
+    step_delay_seconds: float = 0.0  # sleep after each optimizer step (low-load mode)
+
     # Misc
     seed: int = 42
     report_to: str = "wandb"
@@ -176,17 +181,39 @@ class SLMTrainer:
             save_steps=self.config.save_steps,
             eval_steps=self.config.eval_steps,
             save_total_limit=self.config.save_total_limit,
-            evaluation_strategy="steps" if self.config.eval_steps else "no",
-            load_best_model_at_end=True if self.config.eval_steps else False,
+            eval_strategy="steps" if self.config.eval_steps else "no",
+            load_best_model_at_end=bool(self.config.eval_steps),
             report_to=self.config.report_to,
             seed=self.config.seed,
             gradient_checkpointing=self.config.gradient_checkpointing,
             gradient_checkpointing_kwargs={"use_reentrant": False},
             max_grad_norm=1.0,
-            dataloader_pin_memory=True,
+            dataloader_pin_memory=self.config.dataloader_pin_memory,
+            dataloader_num_workers=self.config.dataloader_num_workers,
             remove_unused_columns=False,
         )
     
+    def _tokenize_dataset(self, dataset: Dataset) -> Dataset:
+        """Tokenize examples with a 'text' field (avoids trl on Windows GBK issues)."""
+        max_len = self.config.max_seq_length
+
+        def tokenize(example):
+            tokenized = self.tokenizer(
+                example["text"],
+                truncation=True,
+                max_length=max_len,
+                padding="max_length",
+            )
+            tokenized["labels"] = tokenized["input_ids"].copy()
+            return tokenized
+
+        cols = dataset.column_names
+        return dataset.map(
+            tokenize,
+            remove_columns=cols,
+            desc="Tokenizing",
+        )
+
     def train(
         self,
         train_dataset: Dataset,
@@ -196,29 +223,56 @@ class SLMTrainer:
         Run the fine-tuning process.
         
         Args:
-            train_dataset: Training dataset with 'text' or 'messages' field
+            train_dataset: Training dataset with 'text' field (chat-templated)
             eval_dataset: Optional evaluation dataset
         """
         if self.peft_model is None:
             self.load_model()
-        
+
+        train_dataset = self._tokenize_dataset(train_dataset)
+        if eval_dataset is not None:
+            eval_dataset = self._tokenize_dataset(eval_dataset)
+
         training_args = self.get_training_arguments()
-        
-        # Create trainer
-        trainer = SFTTrainer(
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer=self.tokenizer,
+            mlm=False,
+        )
+
+        callbacks: list[TrainerCallback] = []
+        if self.config.step_delay_seconds > 0:
+            delay = self.config.step_delay_seconds
+
+            class _Throttle(TrainerCallback):
+                def on_step_end(self, args, state, control, **kwargs):
+                    import time
+
+                    time.sleep(delay)
+                    return control
+
+            callbacks.append(_Throttle())
+
+        import inspect
+
+        trainer_kwargs = dict(
             model=self.peft_model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
-            tokenizer=self.tokenizer,
-            max_seq_length=self.config.max_seq_length,
-            dataset_text_field="text",
-            packing=False,  # Disable packing for tool-use data
+            data_collator=data_collator,
+            callbacks=callbacks or None,
         )
-        
-        # Train
+        # transformers >=4.46 renamed `tokenizer` -> `processing_class`
+        trainer_params = inspect.signature(Trainer.__init__).parameters
+        if "processing_class" in trainer_params:
+            trainer_kwargs["processing_class"] = self.tokenizer
+        else:
+            trainer_kwargs["tokenizer"] = self.tokenizer
+
+        hf_trainer = Trainer(**trainer_kwargs)
+
         logger.info("Starting training...")
-        trainer.train()
+        hf_trainer.train()
         
         # Save final model
         self.save_model()
@@ -254,6 +308,11 @@ def train_tool_use_model(
     model_name: str = "Qwen/Qwen2.5-3B-Instruct",
     num_epochs: int = 3,
     batch_size: int = 4,
+    low_load: bool = False,
+    step_delay_seconds: float = 0.0,
+    max_seq_length: Optional[int] = None,
+    gradient_accumulation_steps: Optional[int] = None,
+    cpu_threads: Optional[int] = None,
 ) -> None:
     """
     Convenience function to train a tool-use model.
@@ -266,14 +325,37 @@ def train_tool_use_model(
         batch_size: Training batch size
     """
     from edge_slm.data import create_dataset
-    
+    from edge_slm.utils.platform_fixes import ensure_utf8_windows
+
+    ensure_utf8_windows()
+
     config = TrainingConfig(
         model_name=model_name,
         output_dir=output_dir,
         num_epochs=num_epochs,
         batch_size=batch_size,
+        step_delay_seconds=step_delay_seconds,
     )
-    
+    if max_seq_length is not None:
+        config.max_seq_length = max_seq_length
+    if gradient_accumulation_steps is not None:
+        config.gradient_accumulation_steps = gradient_accumulation_steps
+
+    if low_load:
+        from edge_slm.finetune.training_profile import (
+            apply_host_thread_limits,
+            low_load_training_config,
+        )
+
+        apply_host_thread_limits(cpu_threads or 4)
+        config = low_load_training_config(config)
+        if step_delay_seconds > 0:
+            config.step_delay_seconds = step_delay_seconds
+    elif cpu_threads is not None:
+        from edge_slm.finetune.training_profile import apply_host_thread_limits
+
+        apply_host_thread_limits(cpu_threads)
+
     trainer = SLMTrainer(config)
     trainer.load_model()
     

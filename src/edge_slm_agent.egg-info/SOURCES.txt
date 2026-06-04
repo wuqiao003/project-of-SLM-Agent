@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 src/edge_slm/__init__.py
 src/edge_slm/cli.py
@@ -8,6 +9,7 @@ src/edge_slm/agent/service.py
 src/edge_slm/data/__init__.py
 src/edge_slm/data/dataset.py
 src/edge_slm/data/distiller.py
+src/edge_slm/data/local_distiller.py
 src/edge_slm/data/schema.py
 src/edge_slm/evaluation/__init__.py
 src/edge_slm/evaluation/benchmark.py
@@ -19,11 +21,17 @@ src/edge_slm/inference/__init__.py
 src/edge_slm/inference/engine.py
 src/edge_slm/inference/structured.py
 src/edge_slm/inference/vllm_engine.py
+src/edge_slm/pipeline/__init__.py
+src/edge_slm/pipeline/acceptance.py
+src/edge_slm/pipeline/gold_data.py
+src/edge_slm/pipeline/prepare.py
+src/edge_slm/pipeline/prompts.py
 src/edge_slm_agent.egg-info/PKG-INFO
 src/edge_slm_agent.egg-info/SOURCES.txt
 src/edge_slm_agent.egg-info/dependency_links.txt
 src/edge_slm_agent.egg-info/entry_points.txt
 src/edge_slm_agent.egg-info/requires.txt
 src/edge_slm_agent.egg-info/top_level.txt
+tests/test_acceptance_gold.py
 tests/test_router.py
 tests/test_structured_decoding.py

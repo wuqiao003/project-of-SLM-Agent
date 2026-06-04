@@ -1,0 +1,63 @@
+# Cluster GPU training profile (multi-GPU / large VRAM)
+# Use with: python run.py train data/prepared/tool_use_train.jsonl --config configs/cluster_train.yaml
+
+project:
+  seed: 42
+
+model:
+  name: "Qwen/Qwen2.5-3B-Instruct"
+  unsloth_name: "unsloth/Qwen2.5-3B-Instruct-bnb-4bit"
+  quantization: "int4"
+  load_in_4bit: true
+
+lora:
+  r: 64
+  alpha: 128
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  learning_rate: 1.0e-4
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  num_epochs: 3
+  max_seq_length: 2048
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  optim: "adamw_8bit"
+  lr_scheduler: "cosine"
+  gradient_checkpointing: true
+
+distillation:
+  teacher_model: "Qwen/Qwen2.5-32B-Instruct"
+  backend: "vllm"
+  api_base: "http://localhost:8000/v1"
+  num_samples: 10000
+  complexity_distribution:
+    simple: 0.70
+    medium: 0.20
+    complex: 0.10
+  batch_size: 16
+
+data:
+  raw_output: "data/distilled"
+  prepared_output: "data/prepared"
+  gold_path: "data/acceptance/simple_gold.jsonl"
+  gold_oversample: 3
+  train_ratio: 0.85
+  val_ratio: 0.10
+  test_ratio: 0.05
+
+inference:
+  use_guided_decoding: true
+  temperature: 0.1
+  max_new_tokens: 512
+
+acceptance:
+  config: "configs/acceptance.json"
+  results_dir: "benchmark_results/acceptance"

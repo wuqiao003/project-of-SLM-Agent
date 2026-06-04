@@ -273,6 +273,10 @@ def train_model(
     batch_size: int = 2,
     learning_rate: float = 2e-4,
     lora_r: int = 64,
+    low_load: bool = False,
+    step_delay: float = 0.0,
+    max_seq_length: int = 2048,
+    grad_accum: int = 4,
 ):
     """使用 GPU 训练模型"""
     print("\n" + "=" * 60)
@@ -281,9 +285,32 @@ def train_model(
     
     # Windows 上 Unsloth 有兼容性问题，直接使用标准训练
     import platform
+    if low_load:
+        batch_size = 1
+        grad_accum = 16
+        max_seq_length = min(max_seq_length, 1024)
+        lora_r = min(lora_r, 32)
+        if step_delay <= 0:
+            step_delay = 0.5
+        from edge_slm.finetune.training_profile import apply_host_thread_limits
+
+        apply_host_thread_limits(4)
+        print("低负载模式: batch=1, grad_accum=16, max_seq=1024, 步间休眠")
+
     if platform.system() == "Windows":
         print("Windows 系统，使用标准训练模式")
-        return train_standard(data_path, output_dir, num_epochs, batch_size, learning_rate, lora_r)
+        return train_standard(
+            data_path,
+            output_dir,
+            num_epochs,
+            batch_size,
+            learning_rate,
+            lora_r,
+            low_load=low_load,
+            step_delay=step_delay,
+            max_seq_length=max_seq_length,
+            grad_accum=grad_accum,
+        )
     
     try:
         # 尝试使用 unsloth（更快，仅 Linux）
@@ -294,10 +321,20 @@ def train_model(
         print("Unsloth 不可用，使用标准训练")
         use_unsloth = False
     
-    if use_unsloth:
+    if use_unsloth and not low_load:
         return train_with_unsloth(data_path, output_dir, num_epochs, batch_size, learning_rate, lora_r)
-    else:
-        return train_standard(data_path, output_dir, num_epochs, batch_size, learning_rate, lora_r)
+    return train_standard(
+        data_path,
+        output_dir,
+        num_epochs,
+        batch_size,
+        learning_rate,
+        lora_r,
+        low_load=low_load,
+        step_delay=step_delay,
+        max_seq_length=max_seq_length,
+        grad_accum=grad_accum,
+    )
 
 
 def train_with_unsloth(
@@ -394,6 +431,10 @@ def train_standard(
     batch_size: int,
     learning_rate: float,
     lora_r: int = 64,
+    low_load: bool = False,
+    step_delay: float = 0.0,
+    max_seq_length: int = 2048,
+    grad_accum: int = 4,
 ):
     """
     标准 transformers 训练 - 展示完整的微调技术栈
@@ -531,7 +572,7 @@ def train_standard(
         tokenized = tokenizer(
             text,
             truncation=True,
-            max_length=2048,
+            max_length=max_seq_length,
             padding="max_length",
         )
         # 设置 labels: -100 表示不计算损失的位置
@@ -551,7 +592,7 @@ def train_standard(
     
     print(f"  - 训练集: {len(train_dataset)} 样本")
     print(f"  - 验证集: {len(eval_dataset)} 样本")
-    print(f"  - 最大长度: 2048 tokens")
+    print(f"  - 最大长度: {max_seq_length} tokens")
     
     # ========================================
     # 5. 训练超参数
@@ -560,7 +601,7 @@ def train_standard(
     print("-" * 40)
     
     # 计算训练步数
-    effective_batch_size = batch_size * 4  # gradient_accumulation_steps=4
+    effective_batch_size = batch_size * grad_accum
     steps_per_epoch = math.ceil(len(train_dataset) / effective_batch_size)
     total_steps = steps_per_epoch * num_epochs
     warmup_steps = int(total_steps * 0.1)
@@ -581,7 +622,9 @@ def train_standard(
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=4,      # 梯度累积: 模拟更大批次
+        gradient_accumulation_steps=grad_accum,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
         
         # 学习率配置
         learning_rate=learning_rate,
@@ -622,6 +665,13 @@ def train_standard(
         def __init__(self):
             self.train_losses = []
             self.eval_losses = []
+            self.step_delay = step_delay
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if self.step_delay > 0:
+                import time
+                time.sleep(self.step_delay)
+            return control
             
         def on_log(self, args, state, control, logs=None, **kwargs):
             if logs:
@@ -733,6 +783,17 @@ def main():
     parser.add_argument("--data-only", action="store_true", help="只生成数据，不训练")
     parser.add_argument("--train-only", action="store_true", help="只训练，使用已有数据")
     parser.add_argument("--data-path", type=str, default="data/generated_train.jsonl", help="数据路径")
+    parser.add_argument(
+        "--low-load",
+        action="store_true",
+        help="低负载训练：小 batch、短序列、步间休眠，主机不易拉满",
+    )
+    parser.add_argument(
+        "--step-delay",
+        type=float,
+        default=0.0,
+        help="每步优化后休眠秒数，如 1.0（越大越慢、负载越低）",
+    )
     
     args = parser.parse_args()
     
@@ -762,6 +823,8 @@ def main():
             batch_size=args.batch_size,
             learning_rate=args.lr,
             lora_r=args.lora_r,
+            low_load=args.low_load,
+            step_delay=args.step_delay,
         )
     
     print("\n" + "=" * 60)

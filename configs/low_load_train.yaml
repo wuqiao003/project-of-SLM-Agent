@@ -1,0 +1,17 @@
+# Low-load training profile — slower, gentler on GPU/CPU
+# CLI: python run.py train data/prepared/tool_use_train.jsonl --low-load --use-unsloth false
+
+lora:
+  r: 32
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  max_seq_length: 1024
+  num_epochs: 3
+
+throttle:
+  step_delay_seconds: 0.5   # 0.5–2.0; increase if machine still feels stuck
+  cpu_threads: 4
+
+# Optional (run in admin PowerShell BEFORE training, NVIDIA only):
+# nvidia-smi -pl 80          # cap GPU power to ~80% TDP
+# Windows: 控制面板 -> 电源 -> 平衡

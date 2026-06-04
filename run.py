@@ -1,4 +1,11 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Must run before other imports on Windows (trl reads UTF-8 .jinja files)."""
+import os
+
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 """
 Simple runner script for Edge SLM Agent.
 Use this instead of the 'edge-slm' command if it's not found.
@@ -6,9 +13,14 @@ Use this instead of the 'edge-slm' command if it's not found.
 Usage:
     python run.py distill --num-samples 100
     python run.py train data/sample_train.jsonl
+    python run.py train data/prepared/tool_use_train.jsonl --low-load --no-use-unsloth --step-delay 0.8
     python run.py serve outputs/model
     python run.py infer outputs/model "帮我分析视频"
     python run.py demo
+    python run.py land
+    python run.py generate-gold
+    python run.py prepare-data data/raw/synthetic_train.jsonl
+    python run.py accept outputs/model
 """
 
 import sys

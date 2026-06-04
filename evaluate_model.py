@@ -1,11 +1,18 @@
 #!/usr/bin/env python
 """
-模型评估脚本 - 测试微调后的工具调用能力
+模型评估脚本 - 测试微调后的工具调用能力（统一 name/arguments JSON 格式）
 """
 
 import json
+import sys
 import torch
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from edge_slm.pipeline.prompts import build_system_prompt
+from edge_slm.pipeline.acceptance import parse_tool_call_from_text
 
 
 def load_model(model_path: str):
@@ -76,17 +83,7 @@ def generate_response(model, tokenizer, messages: list, max_new_tokens: int = 51
 def evaluate_tool_calling(model, tokenizer):
     """评估工具调用能力"""
     
-    # 系统提示词
-    system_prompt = """你是一个视频处理助手。你可以使用以下工具:
-
-1. parse_video(video_url) - 解析视频信息
-2. generate_subtitles(video_url, source_language) - 生成字幕
-3. translate_subtitles(subtitle_id, target_language) - 翻译字幕
-4. add_dubbing(video_url, voice_style, target_language) - 添加配音
-5. download_file(file_id, format) - 下载文件
-
-当需要使用工具时，请使用以下 JSON 格式:
-{"tool": "工具名", "params": {"参数名": "参数值"}}"""
+    system_prompt = build_system_prompt()
 
     # 测试用例 - 20个，从简单到复杂递增
     # expected_params: 期望提取的参数及其值（用于验证参数提取能力）
@@ -101,8 +98,8 @@ def evaluate_tool_calling(model, tokenizer):
         },
         {
             "query": "下载 file_001，mp4格式",
-            "expected_tools": ["download_file"],
-            "expected_params": {"file_id": "file_001", "format": "mp4"},
+            "expected_tools": ["export_project"],
+            "expected_params": {"project_id": "file_001", "output_format": "mp4"},
             "difficulty": "简单",
             "description": "简单下载请求",
         },
@@ -116,14 +113,19 @@ def evaluate_tool_calling(model, tokenizer):
         {
             "query": "翻译字幕 sub_123 到日语",
             "expected_tools": ["translate_subtitles"],
-            "expected_params": {"subtitle_id": "sub_123", "target_language": "日语"},
+            "expected_params": {"subtitle_file": "sub_123", "source_language": "zh", "target_language": "ja"},
             "difficulty": "简单",
             "description": "字幕翻译基础调用",
         },
         {
             "query": "给 https://example.com/clip.mp4 配音，用女声，目标语言中文",
-            "expected_tools": ["add_dubbing"],
-            "expected_params": {"video_url": "https://example.com/clip.mp4", "voice_style": "女声", "target_language": "中文"},
+            "expected_tools": ["generate_dubbing"],
+            "expected_params": {
+                "video_url": "https://example.com/clip.mp4",
+                "subtitle_file": "/subs/clip.srt",
+                "voice_id": "voice_zh_female",
+                "target_language": "zh",
+            },
             "difficulty": "简单",
             "description": "配音基础调用",
         },
@@ -139,7 +141,7 @@ def evaluate_tool_calling(model, tokenizer):
         {
             "query": "能帮我把这个日本动漫的字幕翻译成中文吗？字幕文件编号是 sub_anime_456",
             "expected_tools": ["translate_subtitles"],
-            "expected_params": {"subtitle_id": "sub_anime_456", "target_language": "中文"},
+            "expected_params": {"subtitle_file": "sub_anime_456", "source_language": "ja", "target_language": "zh"},
             "difficulty": "中等",
             "description": "带场景描述的翻译请求",
         },
@@ -152,15 +154,20 @@ def evaluate_tool_calling(model, tokenizer):
         },
         {
             "query": "处理完的视频我想导出来，文件ID是 processed_789，要高清mp4",
-            "expected_tools": ["download_file"],
-            "expected_params": {"file_id": "processed_789", "format": "mp4"},
+            "expected_tools": ["export_project"],
+            "expected_params": {"project_id": "processed_789", "output_format": "mp4"},
             "difficulty": "中等",
             "description": "口语化下载请求",
         },
         {
             "query": "这个英语教学视频需要配上标准美式发音的英语旁白 https://edu.com/lesson1.mp4",
-            "expected_tools": ["add_dubbing"],
-            "expected_params": {"video_url": "https://edu.com/lesson1.mp4", "target_language": "英语"},
+            "expected_tools": ["generate_dubbing"],
+            "expected_params": {
+                "video_url": "https://edu.com/lesson1.mp4",
+                "subtitle_file": "/subs/lesson1.srt",
+                "voice_id": "voice_en_male",
+                "target_language": "en",
+            },
             "difficulty": "中等",
             "description": "带具体要求的配音请求",
         },
@@ -183,21 +190,26 @@ def evaluate_tool_calling(model, tokenizer):
         {
             "query": "我们团队翻译好了一份西班牙语字幕 sub_spanish_doc，现在需要转成葡萄牙语给巴西分公司用",
             "expected_tools": ["translate_subtitles"],
-            "expected_params": {"subtitle_id": "sub_spanish_doc", "target_language": "葡萄牙语"},
+            "expected_params": {"subtitle_file": "sub_spanish_doc", "source_language": "es", "target_language": "pt"},
             "difficulty": "较难",
             "description": "跨国业务场景的翻译",
         },
         {
             "query": "我在做一个面向东南亚市场的APP介绍视频 https://app.com/intro.mp4，需要泰语配音，声音要年轻活泼的女声风格",
-            "expected_tools": ["add_dubbing"],
-            "expected_params": {"video_url": "https://app.com/intro.mp4", "target_language": "泰语", "voice_style": "女声"},
+            "expected_tools": ["generate_dubbing"],
+            "expected_params": {
+                "video_url": "https://app.com/intro.mp4",
+                "subtitle_file": "/subs/intro.srt",
+                "voice_id": "voice_th_female",
+                "target_language": "th",
+            },
             "difficulty": "较难",
             "description": "详细要求的配音场景",
         },
         {
             "query": "客户催着要最终版视频了，文件编号 final_cut_2024，导出成mov格式方便他们在Mac上编辑",
-            "expected_tools": ["download_file"],
-            "expected_params": {"file_id": "final_cut_2024", "format": "mov"},
+            "expected_tools": ["export_project"],
+            "expected_params": {"project_id": "final_cut_2024", "output_format": "mov"},
             "difficulty": "较难",
             "description": "紧急业务场景的下载",
         },
@@ -220,7 +232,7 @@ def evaluate_tool_calling(model, tokenizer):
         {
             "query": "字幕提取好了，编号是 sub_ted_en_001，请把它翻译成简体中文，我要用来做双语字幕",
             "expected_tools": ["translate_subtitles"],
-            "expected_params": {"subtitle_id": "sub_ted_en_001", "target_language": "中文"},
+            "expected_params": {"subtitle_file": "sub_ted_en_001", "source_language": "en", "target_language": "zh"},
             "difficulty": "复杂",
             "description": "多步骤任务的后续步骤",
         },
@@ -235,8 +247,13 @@ def evaluate_tool_calling(model, tokenizer):
         },
         {
             "query": "我们是一家MCN机构，正在帮一个日本美妆博主做中国市场本地化。她的最新视频 https://youtube.com/beauty_tips.mp4 需要完整处理：目前视频是日语的，我们已经人工翻译好了中文字幕文件 sub_beauty_cn_final，现在需要找一个甜美风格的中文女声来配音，让中国观众听起来更亲切自然。请帮我添加配音",
-            "expected_tools": ["add_dubbing"],
-            "expected_params": {"video_url": "https://youtube.com/beauty_tips.mp4", "target_language": "中文", "voice_style": "女声"},
+            "expected_tools": ["generate_dubbing"],
+            "expected_params": {
+                "video_url": "https://youtube.com/beauty_tips.mp4",
+                "subtitle_file": "sub_beauty_cn_final",
+                "voice_id": "voice_zh_female",
+                "target_language": "zh",
+            },
             "difficulty": "非常复杂",
             "description": "MCN业务场景+跨国本地化+详细声音要求+完整背景说明",
         },
@@ -287,16 +304,12 @@ def evaluate_tool_calling(model, tokenizer):
         found_tool = None
         found_params = {}
         
-        # 尝试解析 JSON
+        # 解析 JSON（name/arguments 或兼容旧 tool/params）
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start != -1 and end > start:
-                json_str = response[start:end]
-                parsed = json.loads(json_str)
-                
-                found_tool = parsed.get("tool")
-                found_params = parsed.get("params", {})
+            parsed = parse_tool_call_from_text(response)
+            if parsed:
+                found_tool = parsed.get("name")
+                found_params = parsed.get("arguments", {})
                 
                 # 1. 检查工具是否正确
                 if found_tool in expected_tools:
@@ -334,8 +347,10 @@ def evaluate_tool_calling(model, tokenizer):
                     print(f"\n  参数得分: {matched_params}/{total_expected} ({param_score*100:.0f}%)")
                 else:
                     print(f"\n❌ 未提取到任何参数")
+            else:
+                print(f"\n❌ 未找到有效的工具调用 JSON")
                     
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             # JSON 解析失败，检查是否包含工具名
             for tool in expected_tools:
                 if tool in response:

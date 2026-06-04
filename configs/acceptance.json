@@ -1,0 +1,11 @@
+{
+  "gold_data_path": "data/acceptance/simple_gold.jsonl",
+  "held_out_test_path": "data/prepared/tool_use_test.jsonl",
+  "thresholds": {
+    "tool_selection_min": 0.98,
+    "exact_match_min": 0.95,
+    "argument_accuracy_min": 0.95,
+    "json_validity_min": 0.99,
+    "simple_exact_match_min": 1.0
+  }
+}

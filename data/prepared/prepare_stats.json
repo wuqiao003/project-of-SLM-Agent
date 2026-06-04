@@ -1,0 +1,9 @@
+{
+  "input": "F:\\preoject\\project-of-SLM-Agent\\data\\raw\\synthetic_train.jsonl",
+  "rejected": 267,
+  "total_after_dedupe": 1562,
+  "train": 1327,
+  "val": 156,
+  "test": 79,
+  "gold_oversample": 3
+}

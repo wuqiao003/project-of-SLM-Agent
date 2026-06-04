@@ -61,11 +61,31 @@ def train(
     model_name: str = typer.Option("Qwen/Qwen2.5-3B-Instruct", help="Base model"),
     epochs: int = typer.Option(3, help="Number of training epochs"),
     batch_size: int = typer.Option(4, help="Training batch size"),
-    use_unsloth: bool = typer.Option(True, help="Use Unsloth for acceleration"),
+    use_unsloth: bool = typer.Option(
+        True, "--use-unsloth/--no-use-unsloth", help="Use Unsloth for acceleration"
+    ),
+    low_load: bool = typer.Option(
+        False,
+        "--low-load/--no-low-load",
+        help="Gentle mode: batch=1, seq=1024, step delay, fewer CPU threads",
+    ),
+    step_delay: float = typer.Option(
+        0.0,
+        help="Seconds to sleep after each optimizer step (e.g. 0.5–2.0). Use with --low-load",
+    ),
+    cpu_threads: int = typer.Option(4, help="Max CPU threads for PyTorch/OpenMP"),
 ):
     """Fine-tune a model on tool-use data."""
+    if low_load:
+        console.print(
+            "[yellow]Low-load mode: slower training, lower sustained GPU/CPU usage[/yellow]"
+        )
     console.print(f"[bold blue]Starting training on {data_path}...[/bold blue]")
     
+    if use_unsloth and low_load:
+        console.print("[yellow]Unsloth ignores low-load throttle; using standard trainer[/yellow]")
+        use_unsloth = False
+
     if use_unsloth:
         try:
             from edge_slm.finetune.unsloth_trainer import train_with_unsloth
@@ -84,6 +104,9 @@ def train(
                 model_name=model_name,
                 num_epochs=epochs,
                 batch_size=batch_size,
+                low_load=low_load,
+                step_delay_seconds=step_delay,
+                cpu_threads=cpu_threads,
             )
     else:
         from edge_slm.finetune.trainer import train_tool_use_model
@@ -93,6 +116,9 @@ def train(
             model_name=model_name,
             num_epochs=epochs,
             batch_size=batch_size,
+            low_load=low_load,
+            step_delay_seconds=step_delay,
+            cpu_threads=cpu_threads,
         )
     
     console.print(f"[green]Model saved to {output_dir}[/green]")
@@ -184,6 +210,86 @@ Respond with JSON: {{"name": "tool_name", "arguments": {{...}}}}
     console.print(f"  Parsed: {result.parsed}")
     console.print(f"  Latency: {result.latency_ms:.1f}ms")
     console.print(f"  Valid: {result.is_valid}")
+
+
+@app.command("prepare-data")
+def prepare_data(
+    input_path: str = typer.Argument(..., help="Raw JSONL training file"),
+    output_dir: str = typer.Option("data/prepared", help="Output directory for splits"),
+    gold_path: Optional[str] = typer.Option(
+        "data/acceptance/simple_gold.jsonl",
+        help="Gold JSONL to oversample into train",
+    ),
+    gold_oversample: int = typer.Option(3, help="Repeat gold samples in train"),
+):
+    """Validate, dedupe, merge gold, and split train/val/test."""
+    from edge_slm.pipeline.prepare import prepare_dataset_from_jsonl
+
+    paths = prepare_dataset_from_jsonl(
+        input_path,
+        output_dir,
+        gold_path=gold_path if Path(gold_path).exists() else None,
+        gold_oversample=gold_oversample,
+    )
+    for name, p in paths.items():
+        console.print(f"[green]{name}[/green] -> {p}")
+
+
+@app.command("generate-gold")
+def generate_gold(
+    output_path: str = typer.Option(
+        "data/acceptance/simple_gold.jsonl",
+        help="Output path for acceptance gold set",
+    ),
+    variants: bool = typer.Option(True, help="Include phrasing variants"),
+):
+    """Generate simple-task gold acceptance dataset."""
+    from edge_slm.pipeline.gold_data import generate_simple_gold_dataset
+
+    path = generate_simple_gold_dataset(output_path, include_variants=variants)
+    console.print(f"[green]Gold dataset written to {path}[/green]")
+
+
+@app.command()
+def accept(
+    model_path: str = typer.Argument(..., help="Path to model (adapter or merged)"),
+    config: str = typer.Option("configs/acceptance.json", help="Acceptance thresholds config"),
+    structured: bool = typer.Option(True, help="Use structured decoding"),
+    output_dir: str = typer.Option("benchmark_results/acceptance", help="Report output dir"),
+):
+    """Run acceptance gate on simple-task gold set."""
+    from edge_slm.evaluation.metrics import format_metrics_report
+    from edge_slm.pipeline.acceptance import run_acceptance_gate, save_acceptance_report
+
+    console.print("[bold blue]Running acceptance gate...[/bold blue]")
+    report = run_acceptance_gate(
+        model_path,
+        config_path=config,
+        use_structured_decoding=structured,
+    )
+    console.print(format_metrics_report(report.metrics))
+    out = save_acceptance_report(report, output_dir)
+
+    if report.passed:
+        console.print(f"[bold green]PASSED[/bold green] Report: {out}")
+    else:
+        console.print(f"[bold red]FAILED[/bold red] {report.failures}")
+        console.print(f"Report: {out}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def land(
+    samples: int = typer.Option(2000, help="Synthetic samples for bootstrap"),
+    step: str = typer.Option("all", help="Step: all, env, data, test"),
+):
+    """Bootstrap project: env check, data generation, tests."""
+    import subprocess
+    import sys
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "land_project.py"
+    cmd = [sys.executable, str(script), "--step", step, "--samples", str(samples)]
+    subprocess.run(cmd, check=True)
 
 
 @app.command()
