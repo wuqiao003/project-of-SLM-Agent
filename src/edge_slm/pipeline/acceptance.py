@@ -152,17 +152,63 @@ def run_acceptance_on_predictions(
     )
 
 
+def _load_model_for_eval(model_path: str, base_model: str = "Qwen/Qwen2.5-3B-Instruct"):
+    """Load a LoRA adapter (4bit base + PEFT) or a full/merged model on limited VRAM."""
+    import torch
+    from pathlib import Path as _P
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    is_adapter = (_P(model_path) / "adapter_config.json").exists()
+
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
+    if is_adapter:
+        from peft import PeftModel
+
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=bnb,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(model, model_path)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            quantization_config=bnb,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+    model.eval()
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
+
+
 def run_acceptance_gate(
     model_path: str,
     config_path: str = "configs/acceptance.json",
     *,
     use_structured_decoding: bool = True,
+    base_model: str = "Qwen/Qwen2.5-3B-Instruct",
+    max_samples: Optional[int] = None,
 ) -> AcceptanceReport:
     """
-    Run acceptance on gold set using the project's inference engine.
+    Run acceptance on the gold set.
+
+    Loads a LoRA adapter (base 4bit + PEFT) or merged model, and reuses the gold
+    messages (same system/user prompt as training) for faithful evaluation.
     """
-    from edge_slm.inference import create_engine
-    from edge_slm.data.schema import LIGHT_ON_TOOLS
+    import time
+    import torch
 
     config = load_acceptance_config(config_path)
     gold_path = Path(config.gold_data_path)
@@ -172,28 +218,40 @@ def run_acceptance_gate(
         )
 
     samples, references = _load_gold_references(gold_path)
-    tools = [t.to_openai_format() for t in LIGHT_ON_TOOLS]
+    if max_samples:
+        samples = samples[:max_samples]
+        references = references[:max_samples]
 
-    engine = create_engine(model_path, use_structured_decoding=use_structured_decoding)
-    engine.load_model()
+    model, tokenizer = _load_model_for_eval(model_path, base_model=base_model)
 
     predictions = []
     latencies = []
 
     for sample in samples:
-        query = next(m["content"] for m in sample["messages"] if m["role"] == "user")
-        prompt = build_inference_prompt(query)
+        # Use the same messages as training (system + user), drop the gold assistant turn
+        msgs = [m for m in sample["messages"] if m["role"] in ("system", "user")]
+        text = tokenizer.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=True
+        )
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
 
-        result = engine.generate(prompt, tools=tools)
-        latencies.append(result.latency_ms)
+        start = time.time()
+        with torch.no_grad():
+            out = model.generate(
+                **inputs,
+                max_new_tokens=256,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        latencies.append((time.time() - start) * 1000)
 
-        if result.is_valid and result.parsed:
-            predictions.append(result.parsed)
-        else:
-            try:
-                predictions.append(parse_tool_call_from_text(result.text or ""))
-            except json.JSONDecodeError:
-                predictions.append({})
+        gen = tokenizer.decode(
+            out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+        )
+        try:
+            predictions.append(parse_tool_call_from_text(gen))
+        except (json.JSONDecodeError, ValueError):
+            predictions.append({})
 
     report = run_acceptance_on_predictions(
         predictions, references, config, dataset_name="simple_gold", latencies=latencies

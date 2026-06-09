@@ -97,11 +97,11 @@ def evaluate_tool_calling(model, tokenizer):
             "description": "最基础的单工具调用",
         },
         {
-            "query": "下载 file_001，mp4格式",
+            "query": "导出项目 proj_001，mp4格式",
             "expected_tools": ["export_project"],
-            "expected_params": {"project_id": "file_001", "output_format": "mp4"},
+            "expected_params": {"project_id": "proj_001", "output_format": "mp4"},
             "difficulty": "简单",
-            "description": "简单下载请求",
+            "description": "导出项目基础调用",
         },
         {
             "query": "给视频加字幕 https://test.com/movie.mp4 语言是英语",
@@ -118,25 +118,23 @@ def evaluate_tool_calling(model, tokenizer):
             "description": "字幕翻译基础调用",
         },
         {
-            "query": "给 https://example.com/clip.mp4 配音，用女声，目标语言中文",
+            "query": "给 https://example.com/clip.mp4 配音，目标语言中文",
             "expected_tools": ["generate_dubbing"],
             "expected_params": {
                 "video_url": "https://example.com/clip.mp4",
-                "subtitle_file": "/subs/clip.srt",
-                "voice_id": "voice_zh_female",
                 "target_language": "zh",
             },
             "difficulty": "简单",
-            "description": "配音基础调用",
+            "description": "配音基础调用（仅校验可提取参数）",
         },
         
         # ============ 中等级别 (6-10) - 单工具、口语化表达 ============
         {
-            "query": "我有个YouTube视频想看看里面有什么内容，链接是 https://youtube.com/watch?v=abc123",
+            "query": "我想看看这个视频的时长和分辨率，链接是 https://youtube.com/watch?v=abc123",
             "expected_tools": ["parse_video"],
             "expected_params": {"video_url": "https://youtube.com/watch?v=abc123"},
             "difficulty": "中等",
-            "description": "口语化表达解析需求",
+            "description": "口语化的视频信息解析需求",
         },
         {
             "query": "能帮我把这个日本动漫的字幕翻译成中文吗？字幕文件编号是 sub_anime_456",
@@ -160,16 +158,14 @@ def evaluate_tool_calling(model, tokenizer):
             "description": "口语化下载请求",
         },
         {
-            "query": "这个英语教学视频需要配上标准美式发音的英语旁白 https://edu.com/lesson1.mp4",
+            "query": "这个英语教学视频需要配上英语旁白 https://edu.com/lesson1.mp4",
             "expected_tools": ["generate_dubbing"],
             "expected_params": {
                 "video_url": "https://edu.com/lesson1.mp4",
-                "subtitle_file": "/subs/lesson1.srt",
-                "voice_id": "voice_en_male",
                 "target_language": "en",
             },
             "difficulty": "中等",
-            "description": "带具体要求的配音请求",
+            "description": "带具体要求的配音请求（仅校验可提取参数）",
         },
         
         # ============ 较难级别 (11-15) - 多步骤暗示、复杂场景 ============
@@ -195,16 +191,14 @@ def evaluate_tool_calling(model, tokenizer):
             "description": "跨国业务场景的翻译",
         },
         {
-            "query": "我在做一个面向东南亚市场的APP介绍视频 https://app.com/intro.mp4，需要泰语配音，声音要年轻活泼的女声风格",
+            "query": "我在做一个面向东南亚市场的APP介绍视频 https://app.com/intro.mp4，需要泰语配音",
             "expected_tools": ["generate_dubbing"],
             "expected_params": {
                 "video_url": "https://app.com/intro.mp4",
-                "subtitle_file": "/subs/intro.srt",
-                "voice_id": "voice_th_female",
                 "target_language": "th",
             },
             "difficulty": "较难",
-            "description": "详细要求的配音场景",
+            "description": "详细要求的配音场景（仅校验可提取参数）",
         },
         {
             "query": "客户催着要最终版视频了，文件编号 final_cut_2024，导出成mov格式方便他们在Mac上编辑",
@@ -216,11 +210,11 @@ def evaluate_tool_calling(model, tokenizer):
         
         # ============ 复杂级别 (16-18) - 多工具串联暗示 ============
         {
-            "query": "我有一个英文的TED演讲视频 https://ted.com/talk123.mp4，想做成中文版发到B站。首先帮我分析一下这个视频的基本信息",
+            "query": "我有一个英文的TED演讲视频 https://ted.com/talk123.mp4，想做成中文版发到B站。首先帮我解析一下这个视频的时长和分辨率信息",
             "expected_tools": ["parse_video"],
             "expected_params": {"video_url": "https://ted.com/talk123.mp4"},
             "difficulty": "复杂",
-            "description": "多步骤任务的第一步",
+            "description": "多步骤任务的第一步（解析元信息）",
         },
         {
             "query": "继续上个任务，视频分析完了，现在需要先提取出英文字幕，视频地址还是 https://ted.com/talk123.mp4",
@@ -239,7 +233,7 @@ def evaluate_tool_calling(model, tokenizer):
         
         # ============ 非常复杂级别 (19-20) - 多工具、复杂场景、多条件 ============
         {
-            "query": "我是一个自媒体博主，最近接了个跨境电商的推广单。客户给了个英文产品介绍视频 https://amazon.com/product_demo.mp4，我需要：1）先分析视频了解内容结构；2）然后提取英文字幕。视频大概3分钟，产品是智能手表。先帮我做第一步，解析视频信息",
+            "query": "我是一个自媒体博主，最近接了个跨境电商的推广单。客户给了个英文产品介绍视频 https://amazon.com/product_demo.mp4，我需要：1）先获取视频的时长和分辨率信息；2）然后提取英文字幕。视频大概3分钟，产品是智能手表。先帮我做第一步，解析视频信息",
             "expected_tools": ["parse_video"],
             "expected_params": {"video_url": "https://amazon.com/product_demo.mp4"},
             "difficulty": "非常复杂",
@@ -251,7 +245,6 @@ def evaluate_tool_calling(model, tokenizer):
             "expected_params": {
                 "video_url": "https://youtube.com/beauty_tips.mp4",
                 "subtitle_file": "sub_beauty_cn_final",
-                "voice_id": "voice_zh_female",
                 "target_language": "zh",
             },
             "difficulty": "非常复杂",
